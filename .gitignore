@@ -1,3 +1,8 @@
+# Ignore tags added to template
+data_extra_nonfiction/
+data/
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
