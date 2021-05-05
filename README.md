@@ -49,7 +49,6 @@ This is the repository for code related to my DS 5001 Exploratory Text Analytics
 - Vergil
   - *Aeneid*
 
-
 ## Data format
 
 - Documents are in XML format
