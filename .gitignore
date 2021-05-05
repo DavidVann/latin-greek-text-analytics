@@ -1,6 +1,7 @@
 # Ignore tags added to template
 data_extra_nonfiction/
 data/
+.DS_Store
 
 
 # Byte-compiled / optimized / DLL files

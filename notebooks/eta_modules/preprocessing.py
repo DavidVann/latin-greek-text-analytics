@@ -7,6 +7,7 @@ import os
 
 import pandas as pd
 import nltk
+from nltk.stem.porter import PorterStemmer
 
 from bs4 import BeautifulSoup
 
@@ -150,15 +151,51 @@ class Document:
     def __repr__(self):
         return f"Document: {self.title}, by {self.author}. Play: {self.play}."
 
-def create_tables(docs):
-    """Concatenate document tables to form overall corpus tables."""
-    LIB = pd.DataFrame([[idx, doc.author, doc.title, doc.path] for idx, doc in enumerate(docs)], columns=['work', 'author', 'title', 'path']).set_index('work')
-    DOC = pd.concat([doc.doc for doc in docs], keys=LIB.index, names=['work'])
-    TOKEN = pd.concat([doc.token for doc in docs], keys=LIB.index, names=['work'])
-    return LIB, DOC, TOKEN
+class Corpus:
+    """Container for holding corpus tables and performing further processing on a list of (processed) Documents."""
+    def __init__(self, doc_list):
+        """Extracts document tables from Documents and concatenates/converts them into LIB, DOC, and TOKEN tables."""
+        self.lib = pd.DataFrame([[idx, d.author, d.title, d.path] for idx, d in enumerate(doc_list)], 
+                                    columns=['work', 'author', 'title', 'path']).set_index('work')
+        self.doc = pd.concat([d.doc for d in doc_list], keys=self.lib.index, names=['work'])
+        self.token = pd.concat([d.token for d in doc_list], keys=self.lib.index, names=['work'])
 
-def extract_vocab(token):
-    """Creates vocabulary from token table based on occurrence counts of each normalized term."""
-    VOCAB = (token.term_str.value_counts().to_frame().sort_index().reset_index().rename(columns={'index':'term_str', 'term_str':'n'}))
-    VOCAB.index.name = 'term_id'
-    return VOCAB
+        self.vocab = None
+
+    def extract_vocab(self):
+        self.vocab = (self.token['term_str'].value_counts().to_frame().sort_index()
+                        .reset_index().rename(columns={'index':'term_str', 'term_str': 'n'}))
+        self.vocab.index.name = 'term_id'
+
+    def annotate_vocab(self):
+        """Add additional linguistic features to VOCAB table (stop words, stems)."""
+        # Get list of stopwords
+        stop_words = (pd.DataFrame(nltk.corpus.stopwords.words('english'), columns=['term_str'])
+                        .reset_index().set_index('term_str'))
+        stop_words.columns = ['dummy']
+        stop_words['dummy'] = 1
+
+        # Add stopword indicator to VOCAB table
+        self.vocab['stop'] = self.vocab['term_str'].map(stop_words['dummy'])
+        self.vocab['stop'] = self.vocab['stop'].fillna(0).astype('int')
+
+        # Add Porter stems to VOCAB
+        stemmer = PorterStemmer()
+        self.vocab['p_stem'] = self.vocab['term_str'].apply(stemmer.stem)
+
+    def save_tables(self, dir):
+        """Save corpus tables to CSV files within the given folder."""
+        self.lib.to_csv(os.path.join(dir, 'LIB.csv'))
+        self.doc.to_csv(os.path.join(dir, 'DOC.csv'))
+        self.token.to_csv(os.path.join(dir, 'TOKEN.csv'))
+        self.vocab.to_csv(os.path.join(dir, 'VOCAB.csv'))
+
+    def load_tables(self, dir):
+        """Load a set of tables previously computed into Corpus."""
+        try:
+            self.lib = pd.read_csv(os.path.join(dir, 'LIB.csv'))
+            self.doc = pd.read_csv(os.path.join(dir, 'DOC.csv'))
+            self.token = pd.read_csv(os.path.join(dir, 'TOKEN.csv'))
+            self.vocab = pd.read_csv(os.path.join(dir, 'VOCAB.csv'))
+        except FileNotFoundError:
+            print("Missing one or more tables.")
