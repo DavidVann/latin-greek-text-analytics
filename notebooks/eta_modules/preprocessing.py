@@ -258,7 +258,7 @@ class Corpus:
         for m in methods:
             col = f'tfidf_{m}'
             col_sum = col + "_sum"
-            self.vocab[col_sum] = BOW.groupby('term_str')[col].sum()
+            self.vocab[col_sum] = BOW.groupby('term_str')[col].sum() # Sum up tf-idf values across different bags
             self.vocab[col_sum] = (self.vocab[col_sum] - self.vocab[col_sum].mean()) / self.vocab[col_sum].std() # Center + scale
             self.vocab[col_sum] = self.vocab[col_sum] - self.vocab[col_sum].min() # Subtract minimum
             self.vocab[col_sum] = self.vocab[col_sum] / N_docs
