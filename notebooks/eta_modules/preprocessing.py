@@ -186,7 +186,7 @@ class Corpus:
         stemmer = PorterStemmer()
         self.vocab['p_stem'] = self.vocab['term_str'].apply(stemmer.stem)
 
-        self.vocab.set_index('term_str')
+        self.vocab = self.vocab.set_index('term_str')
 
     def save_tables(self, dir: str) -> None:
         """Save corpus tables to CSV files within the given folder."""
