@@ -5,6 +5,7 @@
 
 import os
 
+import numpy as np
 import pandas as pd
 import nltk
 from nltk.stem.porter import PorterStemmer
@@ -13,7 +14,7 @@ from bs4 import BeautifulSoup
 
 class Document:
     """Class for handling input and parsing of XML files from Perseus Digital Library."""
-    def __init__(self, path):
+    def __init__(self, path) -> None:
         """Initialize object with filepath to XML file.
         
         Args:
@@ -32,7 +33,7 @@ class Document:
         playwrights = ['Aeschylus', 'Euripides', 'Sophocles']
         self.play = self.author in playwrights
         
-    def parse_text_to_paras(self):
+    def parse_text_to_paras(self) -> None:
         """Parses XML document down to paragraph-like chunks using BeautifulSoup."""
         ## Parse with BeautifulSoup and extract some elements
         with open(self.path) as f:
@@ -103,7 +104,7 @@ class Document:
         self.doc = self.doc[~self.doc['para_str'].str.match(r'^\s*$')] # Remove empty paragraphs (only whitespace)
         self.doc.index.names = self.OHCO[:2] # Change index names for readability
         
-    def tokenize(self, remove_pos_tuple=False, remove_ws=False):
+    def tokenize(self, remove_pos_tuple=False, remove_ws=False) -> None:
         """Tokenizes paragraphs into sentences and words.
         
         Args:
@@ -139,21 +140,24 @@ class Document:
         self.token['term_str'] = self.token['token_str'].str.lower().str.replace(r'[\W_]', '', regex=True) # Normalize tokens
         self.token.index.names = self.OHCO # Rename index
         
-    def pretty_print(self):
+    def pretty_print(self) -> None:
         """Displays text of document with some demarcation of sections."""
+        print(f"TITLE: {self.title}")
+        print(f"AUTHOR: {self.author}")
         for chap, paras in self.doc.groupby('chapter'):
-            print('=====================================================================SECTION=====================================================================')
+            print(f'=====================================================================SECTION {chap+1}=====================================================================')
             for i, para in enumerate(paras['para_str']):
                 if i != 0:
                     print('----------')
                 print(para)
                 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"Document: {self.title}, by {self.author}. Play: {self.play}."
+
 
 class Corpus:
     """Container for holding corpus tables and performing further processing on a list of (processed) Documents."""
-    def __init__(self, doc_list):
+    def __init__(self, doc_list) -> None:
         """Extracts document tables from Documents and concatenates/converts them into LIB, DOC, and TOKEN tables."""
         self.lib = pd.DataFrame([[idx, d.author, d.title, d.path] for idx, d in enumerate(doc_list)], 
                                     columns=['work', 'author', 'title', 'path']).set_index('work')
@@ -162,13 +166,12 @@ class Corpus:
 
         self.vocab = None
 
-    def extract_vocab(self):
-        self.vocab = (self.token['term_str'].value_counts().to_frame().sort_index()
-                        .reset_index().rename(columns={'index':'term_str', 'term_str': 'n'}))
+    def extract_annotate_vocab(self) -> None:
+        """Extract a vocabulary and add additional linguistic features to VOCAB table (stop words, stems)."""
+        self.vocab = (self.token['term_str'].value_counts().to_frame('n')
+                        .reset_index().rename(columns={'index':'term_str'}))
         self.vocab.index.name = 'term_id'
 
-    def annotate_vocab(self):
-        """Add additional linguistic features to VOCAB table (stop words, stems)."""
         # Get list of stopwords
         stop_words = (pd.DataFrame(nltk.corpus.stopwords.words('english'), columns=['term_str'])
                         .reset_index().set_index('term_str'))
@@ -183,14 +186,16 @@ class Corpus:
         stemmer = PorterStemmer()
         self.vocab['p_stem'] = self.vocab['term_str'].apply(stemmer.stem)
 
-    def save_tables(self, dir):
+        self.vocab.set_index('term_str')
+
+    def save_tables(self, dir: str) -> None:
         """Save corpus tables to CSV files within the given folder."""
         self.lib.to_csv(os.path.join(dir, 'LIB.csv'))
         self.doc.to_csv(os.path.join(dir, 'DOC.csv'))
         self.token.to_csv(os.path.join(dir, 'TOKEN.csv'))
         self.vocab.to_csv(os.path.join(dir, 'VOCAB.csv'))
 
-    def load_tables(self, dir):
+    def load_tables(self, dir: str) -> None:
         """Load a set of tables previously computed into Corpus."""
         try:
             self.lib = pd.read_csv(os.path.join(dir, 'LIB.csv'))
@@ -199,3 +204,61 @@ class Corpus:
             self.vocab = pd.read_csv(os.path.join(dir, 'VOCAB.csv'))
         except FileNotFoundError:
             print("Missing one or more tables.")
+
+    def compute_tfidf(self, OHCO_level=['work', 'chapter', 'para'], methods=['n', 'max']) -> None:
+        """Computes TF-IDF values from TOKEN dataframe.
+    
+        Args:
+            OHCO_level (list[str]): level of document organization by which to bag tokens. Based off TOKEN index columns. Defaults to paragraph-type bag.
+            methods (list[str] in {'n', jp', 'cp', 'l2', 'logn', 'sub', 'max', 'bool'}: the method of computing term frequencies (TF). Can include multiple methods. 
+                Defaults to 'n' and 'max' method.
+                'n' -- raw sum
+                'jp' -- joint probability scaling
+                'cp' -- conditional probability scaling
+                'l2' -- L2 normalization
+                'logn' -- logarithmic (base-2) scaling
+                'sub' -- sublinear scaling
+                'max' -- max TF scaling
+                'bool' -- boolean frequency normalization
+        """
+        valid_methods = ['n', 'jp', 'cp', 'l2', 'logn', 'sub', 'max', 'bool']
+        for m in methods:
+            if m not in valid_methods:
+                return f"ERROR: '{m}' is an invalid method."
+
+        method_funcs = {
+        'jp': lambda x: x / x.sum().sum(),
+        'cp': lambda x: x / x.sum(),
+        'l2': lambda x: x / np.sqrt((x**2).sum()),
+        'logn': lambda x: np.log2(1 + x),
+        'sub': lambda x: 1 + np.log2(x),
+        'max': lambda x: .4 + .6 * (x / x.max()),
+        'bool': lambda x: x.astype('bool') / x.astype('bool').sum()
+        }
+
+        # Standard term frequencies
+        BOW = self.token.groupby(OHCO_level + ['term_str']).term_str.count().to_frame('tf_n') # Compute bag-of-words representation of terms (term frequency)
+        D = BOW.groupby(OHCO_level).tf_n # temporary reference to total term counts by bag
+
+        # Compute other variants of term frequencies
+        for m in methods:
+            if m == 'n':
+                continue
+            else:
+                BOW[f'tf_{m}'] = D.apply(method_funcs[m])
+        
+        self.vocab['df'] = BOW.groupby('term_str').tf_n.count() # Document frequency
+        N_docs = len(D.groups)
+        self.vocab['idf'] = np.log2(N_docs/self.vocab['df']) # Inverse document frequency (log2'd)
+
+        # Compute TF-IDF
+        for m in methods:
+            BOW[f'tfidf_{m}'] = BOW[f'tf_{m}'] * self.vocab['idf']
+        
+        for m in methods:
+            col = f'tfidf_{m}'
+            col_sum = col + "_sum"
+            self.vocab[col_sum] = BOW.groupby('term_str')[col].sum()
+            self.vocab[col_sum] = (self.vocab[col_sum] - self.vocab[col_sum].mean()) / self.vocab[col_sum].std() # Center + scale
+            self.vocab[col_sum] = self.vocab[col_sum] - self.vocab[col_sum].min() # Subtract minimum
+            self.vocab[col_sum] = self.vocab[col_sum] / N_docs
