@@ -1,16 +1,17 @@
-"""preprocessing.py: Collection of classes and functions to aid in processing XML files for project."""
+"""preprocessing.py: Collection of classes to aid in processing XML files for project."""
 # David Vann (dv6bq@virginia.edu)
 # DS 5001
 # 5 May 2021
 
+from __future__ import annotations
+
 import os
 
+import nltk
 import numpy as np
 import pandas as pd
-import nltk
-from nltk.stem.porter import PorterStemmer
-
 from bs4 import BeautifulSoup
+from nltk.stem.porter import PorterStemmer
 
 class Document:
     """Class for handling input and parsing of XML files from Perseus Digital Library."""
@@ -21,7 +22,7 @@ class Document:
             path (str): filepath to XML file. 
         """
         self.path = path
-        self.OHCO = ['chapter', 'para', 'sent', 'token']
+        self.OHCO = ['chapter_id', 'para_id', 'sent_id', 'token_id']
         
         self.title = ''
         self.author = os.path.normpath(path).split(os.sep)[-3]
@@ -140,16 +141,27 @@ class Document:
         self.token['term_str'] = self.token['token_str'].str.lower().str.replace(r'[\W_]', '', regex=True) # Normalize tokens
         self.token.index.names = self.OHCO # Rename index
         
-    def pretty_print(self) -> None:
-        """Displays text of document with some demarcation of sections."""
+    def pretty_print(self, n_sections=None) -> None:
+        """Displays text of document with some demarcation of sections.
+        
+        Args:
+            n_sections (int): Number of chunks to print out. Prints entire work if None.
+
+        """
         print(f"TITLE: {self.title}")
         print(f"AUTHOR: {self.author}")
-        for chap, paras in self.doc.groupby('chapter'):
+
+        sections_printed = 0
+        for chap, paras in self.doc.groupby('chapter_id'):
+            if n_sections is not None:
+                if sections_printed >= n_sections:
+                    break
             print(f'=====================================================================SECTION {chap+1}=====================================================================')
             for i, para in enumerate(paras['para_str']):
                 if i != 0:
                     print('----------')
                 print(para)
+            sections_printed += 1
                 
     def __repr__(self) -> str:
         return f"Document: {self.title}, by {self.author}. Play: {self.play}."
@@ -157,14 +169,18 @@ class Document:
 
 class Corpus:
     """Container for holding corpus tables and performing further processing on a list of (processed) Documents."""
-    def __init__(self, doc_list) -> None:
-        """Extracts document tables from Documents and concatenates/converts them into LIB, DOC, and TOKEN tables."""
-        self.lib = pd.DataFrame([[idx, d.author, d.title, d.path] for idx, d in enumerate(doc_list)], 
-                                    columns=['work', 'author', 'title', 'path']).set_index('work')
-        self.doc = pd.concat([d.doc for d in doc_list], keys=self.lib.index, names=['work'])
-        self.token = pd.concat([d.token for d in doc_list], keys=self.lib.index, names=['work'])
+    def __init__(self, doc_list=None) -> None:
+        """Extracts document tables from Documents and concatenates/converts them into LIB, DOC, and TOKEN tables.
+        
+        `doc_list` is only optional to allow for easier copying. It should be provided in all other cases.
+        """
+        if doc_list is not None:        
+            self.lib = pd.DataFrame([[idx, d.author, d.title, d.path] for idx, d in enumerate(doc_list)], 
+                                        columns=['work_id', 'author', 'title', 'path']).set_index('work_id')
+            self.doc = pd.concat([d.doc for d in doc_list], keys=self.lib.index, names=['work_id'])
+            self.token = pd.concat([d.token for d in doc_list], keys=self.lib.index, names=['work_id'])
 
-        self.vocab = None
+            self.vocab = None
 
     def extract_annotate_vocab(self) -> None:
         """Extract a vocabulary and add additional linguistic features to VOCAB table (stop words, stems)."""
@@ -205,7 +221,7 @@ class Corpus:
         except FileNotFoundError:
             print("Missing one or more tables.")
 
-    def compute_tfidf(self, OHCO_level=['work', 'chapter', 'para'], methods=['n', 'max']) -> None:
+    def compute_tfidf(self, OHCO_level=['work_id', 'chapter_id', 'para_id'], methods=['n', 'max']) -> None:
         """Computes TF-IDF values from TOKEN dataframe.
     
         Args:
@@ -221,6 +237,8 @@ class Corpus:
                 'max' -- max TF scaling
                 'bool' -- boolean frequency normalization
         """
+        self.tfidf_OHCO = OHCO_level
+
         valid_methods = ['n', 'jp', 'cp', 'l2', 'logn', 'sub', 'max', 'bool']
         for m in methods:
             if m not in valid_methods:
@@ -260,5 +278,32 @@ class Corpus:
             col_sum = col + "_sum"
             self.vocab[col_sum] = BOW.groupby('term_str')[col].sum() # Sum up tf-idf values across different bags
             self.vocab[col_sum] = (self.vocab[col_sum] - self.vocab[col_sum].mean()) / self.vocab[col_sum].std() # Center + scale
-            self.vocab[col_sum] = self.vocab[col_sum] - self.vocab[col_sum].min() # Subtract minimum
-            self.vocab[col_sum] = self.vocab[col_sum] / N_docs
+            self.vocab[col_sum] = self.vocab[col_sum] - self.vocab[col_sum].min() # Subtract minimum            self.vocab[col_sum] = self.vocab[col_sum] / N_docs
+
+        # Save BOW (important for some analysis methods)
+        self.bow = BOW
+
+    def copy(self, copy_all=True, tables=None) -> Corpus:
+        """Returns a new Corpus with copied tables. Can copy all or provide list of desired tables."""
+        corpus = Corpus()
+
+        if tables is not None:
+            if 'lib' in tables:
+                corpus.lib = self.lib.copy()
+            if 'doc' in tables:
+                corpus.doc = self.doc.copy()
+            if 'token' in tables:
+                corpus.token = self.token.copy()
+            if 'vocab' in tables:
+                corpus.vocab = self.vocab.copy()
+            if 'bow' in tables:
+                corpus.bow = self.bow.copy()
+        elif copy_all:
+            corpus.lib = self.lib.copy()
+            corpus.doc = self.doc.copy()
+            corpus.token = self.token.copy()
+            corpus.vocab = self.vocab.copy()
+            corpus.bow = self.bow.copy()
+
+        return corpus
+        
