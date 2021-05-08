@@ -174,6 +174,8 @@ class Corpus:
         
         `doc_list` is only optional to allow for easier copying. It should be provided in all other cases.
         """
+        self.OHCO = ['work_id', 'chapter_id', 'para_id', 'sent_id', 'token_id']
+
         if doc_list is not None:        
             self.lib = pd.DataFrame([[idx, d.author, d.title, d.path] for idx, d in enumerate(doc_list)], 
                                         columns=['work_id', 'author', 'title', 'path']).set_index('work_id')
@@ -183,7 +185,7 @@ class Corpus:
             self.vocab = None
 
     def extract_annotate_vocab(self) -> None:
-        """Extract a vocabulary and add additional linguistic features to VOCAB table (stop words, stems)."""
+        """Extract a vocabulary and add additional linguistic features to VOCAB table (stop words, stems, etc.)."""
         self.vocab = (self.token['term_str'].value_counts().to_frame('n')
                         .reset_index().rename(columns={'index':'term_str'}))
         self.vocab.index.name = 'term_id'
@@ -202,6 +204,14 @@ class Corpus:
         stemmer = PorterStemmer()
         self.vocab['p_stem'] = self.vocab['term_str'].apply(stemmer.stem)
 
+        # Add most common POS to VOCAB
+        pos_max = self.token.groupby(['term_str', 'pos']).agg(count=('token_str', 'count'))
+        pos_max = pos_max.reset_index()
+        pos_max = pos_max.loc[pos_max.groupby('term_str')['count'].idxmax()]
+        pos_max = pos_max.drop(columns='count')
+
+        self.vocab = self.vocab.merge(pos_max, on='term_str').rename(columns={'pos':'pos_max'})
+
         self.vocab = self.vocab.set_index('term_str')
 
     def save_tables(self, dir: str) -> None:
@@ -214,10 +224,10 @@ class Corpus:
     def load_tables(self, dir: str) -> None:
         """Load a set of tables previously computed into Corpus."""
         try:
-            self.lib = pd.read_csv(os.path.join(dir, 'LIB.csv'))
-            self.doc = pd.read_csv(os.path.join(dir, 'DOC.csv'))
-            self.token = pd.read_csv(os.path.join(dir, 'TOKEN.csv'))
-            self.vocab = pd.read_csv(os.path.join(dir, 'VOCAB.csv'))
+            self.lib = pd.read_csv(os.path.join(dir, 'LIB.csv')).set_index(self.OHCO[0])
+            self.doc = pd.read_csv(os.path.join(dir, 'DOC.csv')).set_index(self.OHCO[:3])
+            self.token = pd.read_csv(os.path.join(dir, 'TOKEN.csv')).set_index(self.OHCO)
+            self.vocab = pd.read_csv(os.path.join(dir, 'VOCAB.csv')).set_index('term_str')
         except FileNotFoundError:
             print("Missing one or more tables.")
 
