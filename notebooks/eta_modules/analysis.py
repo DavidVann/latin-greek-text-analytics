@@ -3,6 +3,7 @@
 # DS 5001
 # 6 May 2021
 
+from os import remove
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -12,7 +13,6 @@ from scipy.linalg import eigh
 from scipy.spatial.distance import pdist
 from sklearn.decomposition import LatentDirichletAllocation as LDA
 from sklearn.feature_extraction.text import CountVectorizer
-
 
 from eta_modules.preprocessing import Corpus
 
@@ -161,8 +161,9 @@ class PCA:
 
 
 class TopicModel:
-    def __init__(self, OHCO_level=['work_id', 'chapter_id'], max_features=5000, n_topics=40, n_topic_terms=10, 
+    def __init__(self, remove_proper_nouns=True, OHCO_level=['work_id', 'chapter_id'], max_features=5000, n_topics=40, n_topic_terms=10, 
                     ngram_range=[1, 2], max_iter=20, random_state=None):
+        self.remove_proper_nouns = remove_proper_nouns
         self.bag = OHCO_level
         self.max_features=max_features
         self.n_topics = n_topics
@@ -175,10 +176,44 @@ class TopicModel:
         # Copy corpus over to prevent undesired modifications
         self.corpus = corpus.copy()
         
-        # Create a raw list of document strings to work with scikit-learn's modules
-        self.doc = (self.corpus.token[self.corpus.token.pos.str.match(r'^NNP?S?$')]
+        # Create a list of more complete document strings to work with scikit-learn's modules
+        self.corpus.token.term_str = self.corpus.token.term_str.astype('str')
+
+        if self.remove_proper_nouns:
+            regex_expr = r'^NNS?$'
+        else:
+            regex_expr = r'^NNP?S?$'
+        self.doc = (self.corpus.token[self.corpus.token.pos.str.match(regex_expr)]
                     .groupby(self.bag).term_str
                     .apply(lambda x: ' '.join(x))
                     .to_frame('doc_str'))
 
-        vectorizer = CountVectorizer(max_features=self.max_features, ngram_range=self.ngram_range)
+        vectorizer = CountVectorizer(max_features=self.max_features, ngram_range=self.ngram_range, stop_words='english')
+        self.counts = vectorizer.fit_transform(self.doc.doc_str)
+        self.term = vectorizer.get_feature_names()
+
+        lda = LDA(n_components=self.n_topics, max_iter=self.max_iter, learning_offset=50., random_state=self.random_state)
+        
+        # Theta table -- documents vs. topics
+        self.theta = pd.DataFrame(lda.fit_transform(self.counts), index=self.doc.index)
+        self.theta.columns.name = 'topic_id'
+        
+        # Phi table -- terms vs. topics
+        self.phi = pd.DataFrame(lda.components_, columns=self.term)
+        self.phi.index.name = 'topic_id'
+        self.phi.columns.name = 'term_str'
+
+        # Topic table
+        self.topic = (self.phi.stack().to_frame('topic_weight')
+                        .groupby('topic_id')
+                        .apply(lambda x: x.sort_values('topic_weight', ascending=False)
+                            .head(self.n_topic_terms)
+                            .reset_index()
+                            .drop('topic_id', 1)['term_str']
+                            )
+                        )
+        self.topic['label'] = self.topic.apply(lambda x: str(x.name) + ' ' + ', '.join(x[:self.n_topic_terms]), 1)
+        self.topic['doc_weight_sum'] = self.theta.sum()
+
+    def plot_topic_weights(self):
+        self.topic.sort_values('doc_weight_sum', ascending=True).plot.barh(y='doc_weight_sum', x='label', figsize=(5, self.n_topics/2))

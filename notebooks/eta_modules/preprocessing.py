@@ -226,8 +226,8 @@ class Corpus:
         try:
             self.lib = pd.read_csv(os.path.join(dir, 'LIB.csv')).set_index(self.OHCO[0])
             self.doc = pd.read_csv(os.path.join(dir, 'DOC.csv')).set_index(self.OHCO[:3])
-            self.token = pd.read_csv(os.path.join(dir, 'TOKEN.csv')).set_index(self.OHCO)
-            self.vocab = pd.read_csv(os.path.join(dir, 'VOCAB.csv')).set_index('term_str')
+            self.token = pd.read_csv(os.path.join(dir, 'TOKEN.csv'), dtype={'term_str':'str'}).set_index(self.OHCO)
+            self.vocab = pd.read_csv(os.path.join(dir, 'VOCAB.csv'), dtype={'term_str':'str'}).set_index('term_str')
         except FileNotFoundError:
             print("Missing one or more tables.")
 
