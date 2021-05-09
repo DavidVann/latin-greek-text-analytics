@@ -3,16 +3,21 @@
 # DS 5001
 # 6 May 2021
 
-from os import remove
+from operator import neg
+from os import O_SHLOCK
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from pandas.core.algorithms import mode
 import plotly.express as px
 import scipy.cluster.hierarchy as sch
+from gensim.models import word2vec
 from scipy.linalg import eigh
+from scipy.sparse.construct import random
 from scipy.spatial.distance import pdist
 from sklearn.decomposition import LatentDirichletAllocation as LDA
 from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.manifold import TSNE
 
 from eta_modules.preprocessing import Corpus
 
@@ -215,5 +220,149 @@ class TopicModel:
         self.topic['label'] = self.topic.apply(lambda x: str(x.name) + ' ' + ', '.join(x[:self.n_topic_terms]), 1)
         self.topic['doc_weight_sum'] = self.theta.sum()
 
+        # Topics by author
+        topic_cols = list(range(self.n_topics))
+        self.author_topic = (self.theta.join(self.corpus.lib, on='work_id')
+                                .reset_index().set_index(['author'] + self.bag)
+                                .groupby('author')[topic_cols].mean()
+                                .T)
+        self.author_topic.index.name = 'topic_id'
+        self.author_topic['label'] = self.topic['label']
+
     def plot_topic_weights(self):
         self.topic.sort_values('doc_weight_sum', ascending=True).plot.barh(y='doc_weight_sum', x='label', figsize=(5, self.n_topics/2))
+
+class WordEmbedding:
+    def __init__(self, OHCO_level=['work_id', 'chapter_id', 'para_id']):
+        self.bag = OHCO_level
+
+
+    def fit(self, corpus, window=5, vector_size=256, min_count=50, workers=4):
+        """Runs Gensim word2vec model on corpus.
+        
+        Args:
+            corpus (Corpus): A pre-processed Corpus object.
+            window (int, optional): Maximum distance between the current and predicted word within a sentence.
+            vector_size (int, optional): Dimensionality of the word vectors.
+            min_count (int, optional): Ignores all words with total frequency lower than this.
+            workers (int, optional): Use these many worker threads to train the model (=faster training with multicore machines).
+        """
+        self.corpus = corpus.copy()
+        self.vocab = self.corpus.vocab
+        self.token = self.corpus.token
+
+        regex_expr = r'NNS?$|VB[DGNPZ]' # get non-proper nouns and verbs
+        self.token = self.token[self.token.pos.str.match(regex_expr)]
+        self.docs = (self.token
+                    .groupby(self.bag)
+                    .term_str.apply(lambda x: x.tolist())
+                    .reset_index()['term_str'].tolist()
+                    )
+        self.docs = [doc for doc in self.docs if len(doc) > 1] # remove single word docs
+
+        self.w2v_params = dict(
+            window = window,
+            vector_size = vector_size,
+            min_count = min_count,
+            workers = workers,
+        )
+
+        self.model = word2vec.Word2Vec(self.docs, **self.w2v_params)
+
+        # Extract word vectors into a dataframe
+        self.vectors = pd.DataFrame(
+            dict(
+                vector = self.model.wv.vectors.tolist(),
+                term_str = list(self.model.wv.key_to_index.keys())
+            )
+        ).set_index('term_str')
+
+    def plot_tsne(self, perplexity=40, n_components=2, init='pca', n_iter=2500, random_state=None):
+        tsne = TSNE(perplexity=perplexity, n_components=n_components, init=init, n_iter=n_iter, random_state=random_state)
+        tsne_coords = tsne.fit_transform(self.model.wv.vectors)
+
+        # Pull 2 dimensions from t-sne
+        self.coords = pd.DataFrame(
+            dict(
+                x = tsne_coords[:, 0],
+                y = tsne_coords[:, 1],
+            ),
+            index=self.vectors.index
+        )
+
+        self.coords = self.coords.join(self.vocab)
+        self.coords = self.coords[self.coords.stop == 0] # remove stop words
+
+        fig = px.scatter(self.coords.reset_index(), 'x', 'y',
+                    text='term_str',
+                    color='pos_max',
+                    hover_name='term_str',
+                    height=1000).update_traces(
+                        mode='markers+text',
+                        textfont=dict(color='black', size=14, family='Arial'),
+                        textposition='top center'
+                    )
+        fig.show()
+
+    def word_analogy(self, A, B, C, n=10):
+        try:
+            cols = ['term', 'sim']
+            return pd.DataFrame(self.model.wv.most_similar(positive=[B, C], negative=[A])[0:n], columns=cols)
+        except KeyError as e:
+            print('Error:', e)
+            return None
+
+    def most_similar(self, positive, negative=None):
+        return pd.DataFrame(self.model.wv.most_similar(positive, negative), columns=['term', 'sim'])
+
+class SentimentAnalysis:
+    def __init__(self, nrc_lexicon_path, OHCO_level=['work_id', 'chapter_id']):
+        self.emo_cols = "anger anticipation disgust fear joy sadness surprise trust polarity".split()
+
+        self.lex = pd.read_csv(nrc_lexicon_path).set_index('term_str')
+        self.lex.columns = [col.replace('nrc_', '') for col in self.lex.columns]
+        self.lex['polarity'] = self.lex['positive'] - self.lex['negative']
+
+        self.bag = OHCO_level
+
+    def fit(self, corpus):
+        self.corpus = corpus.copy()
+        self.lib = self.corpus.lib
+        self.corpus.compute_tfidf(OHCO_level=self.bag, methods=['n'])
+
+        # Filter vocab based on words in lexicon
+        self.bow = self.corpus.bow
+        self.vocab = self.corpus.vocab
+        self.vocab = self.vocab.join(self.lex, how='inner')
+
+        # Filter bag-of-words based on lexicon-filtered vocab
+        self.bow = self.bow.join(self.vocab, how='inner')
+
+        bow_cols = ['tfidf_n', 'positive', 'negative'] + self.emo_cols
+        self.bow = self.bow[bow_cols]
+
+        for col in self.emo_cols:
+            self.bow[col] = self.bow[col] * self.bow.tfidf_n
+
+        self.works = self.bow.groupby(['work_id'])[self.emo_cols].mean()
+        self.chaps = self.bow.groupby(['work_id', 'chapter_id'])[self.emo_cols].mean()
+
+        work_labels = self.lib['author'] + ': ' + self.lib['title']
+        self.works.index = work_labels
+
+    def plot_mean_sentiments(self, work_title=None, author=None):
+        work_idxs = None
+        if work_title is not None:
+            work_idxs = self.lib.query(f"title.str.match('{work_title}', case=False)").index.tolist()
+        elif author is not None:
+            work_idxs = self.lib.query(f"author.str.contains('{author}$', case=False)").index.tolist()
+
+        works = self.chaps.loc[work_idxs]
+        works.mean().sort_values().plot.barh()
+
+    def get_chapter_table(self, work_title=None):
+        work_idx = None
+        if work_title is not None:
+            work_idx = self.lib.query(f"title.str.match('{work_title}', case=False)").index.tolist()
+        
+        return self.chaps.loc[work_idx]
