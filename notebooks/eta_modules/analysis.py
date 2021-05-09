@@ -3,8 +3,6 @@
 # DS 5001
 # 6 May 2021
 
-from operator import neg
-from os import O_SHLOCK
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -79,14 +77,6 @@ class HierarchicalClusterAnalysis:
             tree = sch.linkage(self.pdists[metric], method=linkage)
             labels = (self.corpus.lib['author'] + ': ' + self.corpus.lib['title']).values
             plt.figure(figsize=figsize)
-            # fig, axes = plt.subplots(figsize=figsize)
-            # dendrogram = sch.dendrogram(tree,
-            #                             labels=labels,
-            #                             orientation="left",
-            #                             count_sort=True,
-            #                             distance_sort=True,
-            #                             above_threshold_color='0.75',
-            #                             color_threshold=color_thresh)
             sch.dendrogram(tree,
                                         labels=labels,
                                         orientation="left",
@@ -130,8 +120,7 @@ class PCA:
         self.tfidf.columns = self.tfidf.columns.droplevel(0)
         self.tfidf = self.tfidf[self.vocab.index] # filter words based on DF-IDF
 
-        # Apply L2 normalization to TFIDF rows (e.g., normalize values for words across a chapter)
-        self.tfidf = self.tfidf.apply(lambda x: x / np.sqrt(np.square(x).sum()), axis=1)
+        self.tfidf = self.tfidf.apply(lambda x: x / np.sqrt(np.square(x).sum()), axis=1) # Apply L2 normalization to TFIDF rows (e.g., normalize values for words across a chapter)
         self.tfidf = self.tfidf - self.tfidf.mean() # center word vectors
 
         ## PCA calculations
@@ -229,6 +218,11 @@ class TopicModel:
         self.author_topic.index.name = 'topic_id'
         self.author_topic['label'] = self.topic['label']
 
+    def get_top_words(self):
+        top_words = self.topic.drop(columns=['label', 'doc_weight_sum']).stack().value_counts().to_frame('n')
+        top_words['p'] = top_words['n'] / top_words['n'].sum()
+        return top_words
+
     def plot_topic_weights(self):
         self.topic.sort_values('doc_weight_sum', ascending=True).plot.barh(y='doc_weight_sum', x='label', figsize=(5, self.n_topics/2))
 
@@ -237,7 +231,7 @@ class WordEmbedding:
         self.bag = OHCO_level
 
 
-    def fit(self, corpus, window=5, vector_size=256, min_count=50, workers=4):
+    def fit(self, corpus, window=5, vector_size=256, min_count=50, seed=None, workers=4):
         """Runs Gensim word2vec model on corpus.
         
         Args:
@@ -245,6 +239,7 @@ class WordEmbedding:
             window (int, optional): Maximum distance between the current and predicted word within a sentence.
             vector_size (int, optional): Dimensionality of the word vectors.
             min_count (int, optional): Ignores all words with total frequency lower than this.
+            seed (int, optional) – Seed for the random number generator. Initial vectors for each word are seeded with a hash of the concatenation of word + str(seed). Note that for a fully deterministically-reproducible run, you must also limit the model to a single worker thread (workers=1), to eliminate ordering jitter from OS thread scheduling. (In Python 3, reproducibility between interpreter launches also requires use of the PYTHONHASHSEED environment variable to control hash randomization)
             workers (int, optional): Use these many worker threads to train the model (=faster training with multicore machines).
         """
         self.corpus = corpus.copy()
@@ -305,9 +300,10 @@ class WordEmbedding:
         fig.show()
 
     def word_analogy(self, A, B, C, n=10):
+        """Gets top-n most similar vectors for A - B + C. Solves this analogy -- A : B :: C : ? ."""
         try:
             cols = ['term', 'sim']
-            return pd.DataFrame(self.model.wv.most_similar(positive=[B, C], negative=[A])[0:n], columns=cols)
+            return pd.DataFrame(self.model.wv.most_similar(positive=[B, C], negative=[A], topn=n)[0:n], columns=cols)
         except KeyError as e:
             print('Error:', e)
             return None
