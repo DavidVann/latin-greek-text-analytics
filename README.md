@@ -1,6 +1,6 @@
 # latin-greek-text-analytics
 
-This is the repository for code related to my DS 5001 Exploratory Text Analytics final project.
+This is the repository for code/work related to my DS 5001 Exploratory Text Analytics final project. `Final Report.pdf` contains my write-up for this project, and a snapshot of the notebook w/ its outputs is available in the `project.html` file.
 
 ## Data source
 
